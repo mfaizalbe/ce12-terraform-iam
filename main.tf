@@ -8,6 +8,26 @@ locals {
   name_prefix = "faizal"
 }
 
+# Create DynamoDB to store book info
+resource "aws_dynamodb_table" "book_inventory" {
+  name         = "${local.name_prefix}-book-inventory"  # prefixed table name
+  billing_mode = "PAY_PER_REQUEST"                      # on-demand
+  hash_key     = "ISBN"                                 # primary key
+  range_key    = "Genre"                                # sort key
+
+  # primary key attribute
+  attribute {
+    name = "ISBN"
+    type = "S"
+  }
+
+  # sort key attribute
+  attribute {
+    name = "Genre"
+    type = "S"
+  }
+}
+
 # create an IAM role that EC2 can assume
 resource "aws_iam_role" "role_example" {
 
@@ -47,6 +67,20 @@ data "aws_iam_policy_document" "policy_example" {
     actions = ["s3:ListBucket"]
     resources = ["*"]
   }
+
+  # allow listing all DynamoDB table
+  statement {
+    effect    = "Allow"
+    actions   = ["dynamodb:ListTables"]
+    resources = ["*"]
+  }
+
+  # allow EC2 scan only this DynamoDB table
+  statement {
+    effect    = "Allow"
+    actions   = ["dynamodb:Scan"]
+    resources = [aws_dynamodb_table.book_inventory.arn]
+  }
 }
 
 # create the IAM policy from the document above
@@ -81,11 +115,16 @@ data "aws_vpc" "selected" {
   }
 }
 
-# get the subnets inside the default VPC
-data "aws_subnets" "default" {
+# get all public subnets in the VPC
+data "aws_subnets" "public" {
   filter {
     name   = "vpc-id"
     values = [data.aws_vpc.selected.id]
+  }
+
+  filter {
+    name   = "map-public-ip-on-launch"
+    values = ["true"]
   }
 }
 
@@ -93,13 +132,13 @@ data "aws_subnets" "default" {
 resource "aws_instance" "example" {
 
   # Amazon Linux AMI
-  ami = "ami-0df7a207adb9748c7"
+  ami = "ami-0be9cb9f67c8dabd6"
 
   # instance size
   instance_type = "t2.micro"
 
-  # launch EC2 in one of the default VPC subnets
-  subnet_id = data.aws_subnets.default.ids[0]
+  # launch EC2 in one of the public VPC subnets
+  subnet_id = data.aws_subnets.public.ids[0]
 
   # attach the instance profile so EC2 can use the IAM role
   iam_instance_profile = aws_iam_instance_profile.profile_example.name
