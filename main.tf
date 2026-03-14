@@ -128,26 +128,106 @@ data "aws_subnets" "public" {
   }
 }
 
-# launch the EC2 instance
-resource "aws_instance" "example" {
-
-  # Amazon Linux AMI
-  ami = "ami-0be9cb9f67c8dabd6"
-
-  # instance size
-  instance_type = "t2.micro"
-
-  # launch EC2 in one of the public VPC subnets
-  subnet_id = data.aws_subnets.public.ids[0]
-
-  # attach the instance profile so EC2 can use the IAM role
-  iam_instance_profile = aws_iam_instance_profile.profile_example.name
-
-  # give the instance a public IP
-  associate_public_ip_address = true
-
-  # name tag for easier identification
-  tags = {
-    Name = "${local.name_prefix}-ec2"
+# get all private subnets in the VPC
+data "aws_subnets" "private" {
+  filter { 
+    name = "vpc-id" 
+    values = [data.aws_vpc.selected.id] 
   }
+  
+  filter { 
+    name = "map-public-ip-on-launch" 
+    values = ["false"]
+  }
+}
+
+# EC2 security group to allow SSH and internet
+resource "aws_security_group" "ec2_sg" {
+  name        = "${local.name_prefix}-ec2-sg"
+  description = "Allow SSH and outbound"
+  vpc_id      = data.aws_vpc.selected.id
+
+  ingress { 
+    from_port = 22 
+    to_port = 22 
+    protocol = "tcp" 
+    cidr_blocks = ["0.0.0.0/0"] 
+    }
+
+  egress { 
+    from_port = 0 
+    to_port = 0 
+    protocol = "-1" 
+    cidr_blocks = ["0.0.0.0/0"] 
+    }
+}
+
+# RDS security group to allow MySQL from EC2 only
+resource "aws_security_group" "rds_sg" {
+  name        = "${local.name_prefix}-rds-sg"
+  description = "Allow EC2 to connect to RDS"
+  vpc_id      = data.aws_vpc.selected.id
+
+  ingress { 
+    from_port = 3306 
+    to_port = 3306 
+    protocol = "tcp" 
+    security_groups = [aws_security_group.ec2_sg.id] 
+    }
+
+  egress {
+    from_port = 0 
+    to_port = 0 
+    protocol = "-1" 
+    cidr_blocks = ["0.0.0.0/0"] 
+    }
+}
+
+# RDS private subnet group
+resource "aws_db_subnet_group" "rds_subnet" {
+  name        = "${local.name_prefix}-rds-subnet"
+  subnet_ids  = data.aws_subnets.private.ids
+  description = "Subnet group for RDS"
+}
+
+variable "rds_username" {
+  description = "RDS master username"
+  type        = string
+}
+
+variable "rds_password" {
+  description = "RDS master password"
+  type        = string
+  sensitive   = true   # hides output in Terraform logs
+}
+
+# launch RDS instance
+resource "aws_db_instance" "example" {
+  identifier             = "${local.name_prefix}-db"
+  engine                 = "mysql"
+  instance_class         = "db.t3.micro"
+  allocated_storage      = 20
+  skip_final_snapshot    = true
+  publicly_accessible    = false
+  vpc_security_group_ids = [aws_security_group.rds_sg.id]
+  db_subnet_group_name   = aws_db_subnet_group.rds_subnet.name
+  username = var.rds_username
+  password = var.rds_password
+}
+
+# launch EC2 in one of the public VPC subnets
+resource "aws_instance" "example" {
+    ami = "ami-0be9cb9f67c8dabd6" # Amazon Linux AMI
+    instance_type = "t3.micro" # instance size
+    subnet_id = data.aws_subnets.public.ids[0] # launch EC2 in one of the public VPC subnets
+    iam_instance_profile = aws_iam_instance_profile.profile_example.name # attach the instance profile so EC2 can use the IAM role
+    associate_public_ip_address = true # give the instance a public IP
+
+    # attach the EC2 security group
+    vpc_security_group_ids = [aws_security_group.ec2_sg.id]
+    
+    # name tag for easier identification
+    tags = {
+        Name = "${local.name_prefix}-ec2"
+        }
 }
